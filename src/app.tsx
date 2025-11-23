@@ -36,7 +36,7 @@ export const Application = () => {
 
     return (
         <Card>
-            <CardTitle>Starter Kit</CardTitle>
+            <CardTitle>Security Guard</CardTitle>
             <CardBody>
                 <Alert
                     variant="info"
