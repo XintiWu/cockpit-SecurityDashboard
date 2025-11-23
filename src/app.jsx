@@ -711,6 +711,44 @@ export function Application() {
   const [geoIPCache, setGeoIPCache] = useState(new Map());
   const [blockingIP, setBlockingIP] = useState(null);
   const [blockedIPs, setBlockedIPs] = useState([]);
+  
+  // 配置選項狀態
+  const [config, setConfig] = useState(() => {
+    const saved = localStorage.getItem('security-guard-config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved config:', e);
+      }
+    }
+    return {
+      failureThreshold: 5,      // 失敗嘗試閾值 (次數)
+      timeWindow: 10,            // 時間窗口 (分鐘)
+      banDuration: 24            // 封禁時間 (小時)
+    };
+  });
+  
+  // IP 封禁記錄 (IP -> { bannedAt, banDuration, reason })
+  const [bannedIPRecords, setBannedIPRecords] = useState(() => {
+    const saved = localStorage.getItem('security-guard-banned-ips');
+    if (saved) {
+      try {
+        const records = JSON.parse(saved);
+        // 過濾已過期的封禁記錄
+        const now = Date.now();
+        return Object.fromEntries(
+          Object.entries(records).filter(([ip, record]) => {
+            const banEndTime = record.bannedAt + (record.banDuration * 60 * 60 * 1000);
+            return banEndTime > now;
+          })
+        );
+      } catch (e) {
+        console.error('Failed to parse saved banned IPs:', e);
+      }
+    }
+    return {};
+  });
 
   // 資料解析
   const sshFailedParsed = useMemo(() => {
@@ -761,6 +799,45 @@ export function Application() {
     };
   }, [sshFailedParsed, sshAcceptedParsed, sudoAuthFailedParsed, sudoCommandsParsed]);
 
+  // 保存配置到 localStorage
+  useEffect(() => {
+    localStorage.setItem('security-guard-config', JSON.stringify(config));
+  }, [config]);
+  
+  // 保存封禁記錄到 localStorage
+  useEffect(() => {
+    localStorage.setItem('security-guard-banned-ips', JSON.stringify(bannedIPRecords));
+    // 更新 blockedIPs 列表
+    setBlockedIPs(Object.keys(bannedIPRecords));
+  }, [bannedIPRecords]);
+  
+  // 檢查並清理過期的封禁記錄
+  useEffect(() => {
+    const checkExpiredBans = () => {
+      const now = Date.now();
+      const updated = { ...bannedIPRecords };
+      let hasChanges = false;
+      
+      Object.entries(updated).forEach(([ip, record]) => {
+        const banEndTime = record.bannedAt + (record.banDuration * 60 * 60 * 1000);
+        if (banEndTime <= now) {
+          delete updated[ip];
+          hasChanges = true;
+          // 自動解封
+          handleUnbanIP(ip, false);
+        }
+      });
+      
+      if (hasChanges) {
+        setBannedIPRecords(updated);
+      }
+    };
+    
+    checkExpiredBans();
+    const interval = setInterval(checkExpiredBans, 60000); // 每分鐘檢查一次
+    return () => clearInterval(interval);
+  }, [bannedIPRecords]);
+  
   // 資料載入
   useEffect(() => {
     loadAllLogs();
@@ -821,14 +898,27 @@ export function Application() {
   }, [sshFailedByIP, geoIPCache]);
 
   // IP 封鎖功能
-  async function handleBlockIP(ip) {
+  async function handleBlockIP(ip, autoBan = false, reason = "手動封禁") {
     if (!ip || blockingIP) return;
+    
+    // 檢查是否已經被封禁
+    if (bannedIPRecords[ip]) {
+      const record = bannedIPRecords[ip];
+      const banEndTime = record.bannedAt + (record.banDuration * 60 * 60 * 1000);
+      if (banEndTime > Date.now()) {
+        if (!autoBan) {
+          alert(`IP ${ip} 已經被封禁，封禁將在 ${new Date(banEndTime).toLocaleString('zh-TW')} 到期`);
+        }
+        return;
+      }
+    }
 
-    const confirmed = window.confirm(
-      `確定要封鎖 IP ${ip} 嗎？\n\n這將執行：\nufw deny from ${ip} to any port 22\n\n（如果 ufw 不存在則使用 iptables）`
-    );
-
-    if (!confirmed) return;
+    if (!autoBan) {
+      const confirmed = window.confirm(
+        `確定要封鎖 IP ${ip} 嗎？\n\n封禁時間：${config.banDuration} 小時\n\n這將執行：\nufw deny from ${ip} to any port 22\n\n（如果 ufw 不存在則使用 iptables）`
+      );
+      if (!confirmed) return;
+    }
 
     setBlockingIP(ip);
 
@@ -838,15 +928,97 @@ export function Application() {
         { superuser: "require" }
       );
       
-      setBlockedIPs(prev => [...prev, ip]);
-      alert(`✅ 已成功封鎖 IP: ${ip}`);
+      // 記錄封禁信息
+      const banRecord = {
+        bannedAt: Date.now(),
+        banDuration: config.banDuration,
+        reason: autoBan ? `自動封禁（失敗嘗試超過 ${config.failureThreshold} 次）` : reason
+      };
+      
+      setBannedIPRecords(prev => ({
+        ...prev,
+        [ip]: banRecord
+      }));
+      
+      if (!autoBan) {
+        alert(`✅ 已成功封鎖 IP: ${ip}\n封禁時間：${config.banDuration} 小時`);
+      }
     } catch (err) {
       console.error("Failed to block IP:", err);
-      alert(`❌ 封鎖失敗：${String(err)}\n\n可能需要 root 權限或防火牆未安裝。`);
+      if (!autoBan) {
+        alert(`❌ 封鎖失敗：${String(err)}\n\n可能需要 root 權限或防火牆未安裝。`);
+      }
     } finally {
       setBlockingIP(null);
     }
   }
+  
+  // IP 解封功能
+  async function handleUnbanIP(ip, showAlert = true) {
+    if (!ip) return;
+    
+    if (!bannedIPRecords[ip]) {
+      if (showAlert) {
+        alert(`IP ${ip} 未被封禁`);
+      }
+      return;
+    }
+
+    try {
+      // 嘗試從 ufw 或 iptables 移除規則
+      await cockpit.spawn(
+        ["bash", "-c", `command -v ufw >/dev/null 2>&1 && ufw delete deny from ${ip} to any port 22 || iptables -D INPUT -s ${ip} -p tcp --dport 22 -j DROP`],
+        { superuser: "require" }
+      );
+      
+      // 從記錄中移除
+      setBannedIPRecords(prev => {
+        const updated = { ...prev };
+        delete updated[ip];
+        return updated;
+      });
+      
+      if (showAlert) {
+        alert(`✅ 已成功解封 IP: ${ip}`);
+      }
+    } catch (err) {
+      console.error("Failed to unban IP:", err);
+      // 即使命令失敗，也從記錄中移除（可能是規則不存在）
+      setBannedIPRecords(prev => {
+        const updated = { ...prev };
+        delete updated[ip];
+        return updated;
+      });
+      if (showAlert) {
+        alert(`⚠️ 已從記錄中移除 IP: ${ip}\n（防火牆規則可能不存在）`);
+      }
+    }
+  }
+  
+  // 自動封禁檢查（當失敗次數超過閾值時）
+  useEffect(() => {
+    const now = Date.now();
+    
+    sshFailedByIP.forEach(item => {
+      if (!item.ip || item.ip === "unknown") return;
+      
+      // 檢查是否已經被封禁
+      if (bannedIPRecords[item.ip]) {
+        const record = bannedIPRecords[item.ip];
+        const banEndTime = record.bannedAt + (record.banDuration * 60 * 60 * 1000);
+        if (banEndTime > now) {
+          return; // 已經被封禁且未過期
+        }
+      }
+      
+      // 如果失敗次數超過閾值，自動封禁
+      if (item.count >= config.failureThreshold) {
+        handleBlockIP(item.ip, true).catch(err => {
+          console.error('Auto-ban failed:', err);
+        });
+      }
+    });
+  }, [sshFailedByIP, config.failureThreshold, bannedIPRecords]);
 
   // 計算最後更新時間
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
@@ -1310,21 +1482,29 @@ export function Application() {
                         {item.lastSeen}
                       </td>
                       <td style={{ padding: `${DESIGN.spacing.md}px ${isMobile ? DESIGN.spacing.md : DESIGN.spacing.lg}px` }}>
-                        <button
-                          className="pf-c-button pf-m-danger pf-m-small"
-                          onClick={() => handleBlockIP(item.ip)}
-                          disabled={blockingIP !== null || blockedIPs.includes(item.ip)}
-                          style={{ 
-                            ...DESIGN.typography.tiny,
-                            transition: "all 0.2s ease"
-                          }}
-                        >
-                          {blockedIPs.includes(item.ip)
-                            ? "已封鎖"
-                            : blockingIP === item.ip
+                        {bannedIPRecords[item.ip] ? (
+                          <span style={{ 
+                            color: DESIGN.colors.danger,
+                            fontWeight: "bold",
+                            ...DESIGN.typography.small
+                          }}>
+                            ✅ 已封鎖
+                          </span>
+                        ) : (
+                          <button
+                            className="pf-c-button pf-m-danger pf-m-small"
+                            onClick={() => handleBlockIP(item.ip)}
+                            disabled={blockingIP !== null}
+                            style={{ 
+                              ...DESIGN.typography.tiny,
+                              transition: "all 0.2s ease"
+                            }}
+                          >
+                            {blockingIP === item.ip
                               ? "封鎖中..."
                               : "🚫 封鎖"}
-                        </button>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1470,6 +1650,305 @@ export function Application() {
               </table>
             </div>
           )}
+        </div>
+      </ModuleContainer>
+
+      {/* 模組 5：IP 封禁管理 */}
+      <ModuleContainer title="IP 封禁管理" description="查看和管理已封禁的 IP 地址">
+        <div style={{
+          borderRadius: DESIGN.borderRadius.md,
+          border: `1px solid ${DESIGN.colors.bg.border}`,
+          padding: DESIGN.spacing.xl,
+          background: DESIGN.colors.bg.card,
+          boxShadow: DESIGN.shadows.sm
+        }}>
+          {Object.keys(bannedIPRecords).length === 0 ? (
+            <p style={{ 
+              color: DESIGN.colors.text.muted, 
+              textAlign: "center", 
+              padding: DESIGN.spacing.xxxl,
+              ...DESIGN.typography.body
+            }}>
+              目前沒有被封禁的 IP
+            </p>
+          ) : (
+            <div style={{ overflowX: "auto", overflowY: "visible" }}>
+              <table
+                className="pf-c-table pf-m-grid-md"
+                style={{ 
+                  width: "100%", 
+                  ...DESIGN.typography.body,
+                  borderCollapse: "separate",
+                  borderSpacing: 0
+                }}
+              >
+                <thead>
+                  <tr style={{
+                    background: DESIGN.colors.bg.card,
+                    borderBottom: `2px solid ${DESIGN.colors.bg.border}`
+                  }}>
+                    <th style={{ 
+                      padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                      textAlign: "left",
+                      ...DESIGN.typography.small,
+                      fontWeight: "600",
+                      color: DESIGN.colors.text.primary,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      IP 位址
+                    </th>
+                    <th style={{ 
+                      padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                      textAlign: "left",
+                      ...DESIGN.typography.small,
+                      fontWeight: "600",
+                      color: DESIGN.colors.text.primary,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      封禁時間
+                    </th>
+                    <th style={{ 
+                      padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                      textAlign: "left",
+                      ...DESIGN.typography.small,
+                      fontWeight: "600",
+                      color: DESIGN.colors.text.primary,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      到期時間
+                    </th>
+                    <th style={{ 
+                      padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                      textAlign: "left",
+                      ...DESIGN.typography.small,
+                      fontWeight: "600",
+                      color: DESIGN.colors.text.primary,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      原因
+                    </th>
+                    <th style={{ 
+                      padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                      textAlign: "left",
+                      ...DESIGN.typography.small,
+                      fontWeight: "600",
+                      color: DESIGN.colors.text.primary,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      操作
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(bannedIPRecords).map(([ip, record]) => {
+                    const banEndTime = record.bannedAt + (record.banDuration * 60 * 60 * 1000);
+                    const timeRemaining = banEndTime - Date.now();
+                    const hoursRemaining = Math.ceil(timeRemaining / (60 * 60 * 1000));
+                    
+                    return (
+                      <tr 
+                        key={ip}
+                        style={{
+                          borderBottom: `1px solid ${DESIGN.colors.bg.border}`
+                        }}
+                      >
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          fontFamily: "monospace", 
+                          fontWeight: "bold",
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {ip}
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          ...DESIGN.typography.small,
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {new Date(record.bannedAt).toLocaleString('zh-TW')}
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          ...DESIGN.typography.small,
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {new Date(banEndTime).toLocaleString('zh-TW')}
+                          <br />
+                          <span style={{ 
+                            color: DESIGN.colors.text.secondary,
+                            fontSize: DESIGN.typography.tiny.fontSize
+                          }}>
+                            (剩餘 {hoursRemaining > 0 ? `${hoursRemaining} 小時` : '即將到期'})
+                          </span>
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          ...DESIGN.typography.small,
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {record.reason}
+                        </td>
+                        <td style={{ padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px` }}>
+                          <button
+                            className="pf-c-button pf-m-success pf-m-small"
+                            onClick={() => handleUnbanIP(ip)}
+                            style={{ 
+                              ...DESIGN.typography.tiny,
+                              transition: "all 0.2s ease"
+                            }}
+                          >
+                            🔓 解封
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </ModuleContainer>
+
+      {/* 模組 6：配置選項 */}
+      <ModuleContainer title="配置選項" description="設定 IP 封禁規則參數">
+        <div style={{
+          borderRadius: DESIGN.borderRadius.md,
+          border: `1px solid ${DESIGN.colors.bg.border}`,
+          padding: DESIGN.spacing.xl,
+          background: DESIGN.colors.bg.card,
+          boxShadow: DESIGN.shadows.sm
+        }}>
+          <div style={{ 
+            display: "grid", 
+            gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", 
+            gap: DESIGN.spacing.lg,
+            marginBottom: DESIGN.spacing.lg
+          }}>
+            <div>
+              <label style={{ 
+                display: "block",
+                marginBottom: DESIGN.spacing.sm,
+                ...DESIGN.typography.small,
+                fontWeight: "600",
+                color: DESIGN.colors.text.primary
+              }}>
+                失敗嘗試閾值 (次數):
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={config.failureThreshold}
+                onChange={(e) => setConfig(prev => ({ ...prev, failureThreshold: parseInt(e.target.value) || 5 }))}
+                style={{
+                  width: "100%",
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body,
+                  fontSize: "1rem"
+                }}
+              />
+              <p style={{ 
+                marginTop: DESIGN.spacing.xs,
+                ...DESIGN.typography.tiny,
+                color: DESIGN.colors.text.muted
+              }}>
+                當 IP 在時間窗口內失敗次數達到此值時，將自動封禁
+              </p>
+            </div>
+            
+            <div>
+              <label style={{ 
+                display: "block",
+                marginBottom: DESIGN.spacing.sm,
+                ...DESIGN.typography.small,
+                fontWeight: "600",
+                color: DESIGN.colors.text.primary
+              }}>
+                時間窗口 (分鐘):
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                value={config.timeWindow}
+                onChange={(e) => setConfig(prev => ({ ...prev, timeWindow: parseInt(e.target.value) || 10 }))}
+                style={{
+                  width: "100%",
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body,
+                  fontSize: "1rem"
+                }}
+              />
+              <p style={{ 
+                marginTop: DESIGN.spacing.xs,
+                ...DESIGN.typography.tiny,
+                color: DESIGN.colors.text.muted
+              }}>
+                統計失敗嘗試的時間範圍
+              </p>
+            </div>
+            
+            <div>
+              <label style={{ 
+                display: "block",
+                marginBottom: DESIGN.spacing.sm,
+                ...DESIGN.typography.small,
+                fontWeight: "600",
+                color: DESIGN.colors.text.primary
+              }}>
+                封禁時間 (小時):
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="168"
+                value={config.banDuration}
+                onChange={(e) => setConfig(prev => ({ ...prev, banDuration: parseInt(e.target.value) || 24 }))}
+                style={{
+                  width: "100%",
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body,
+                  fontSize: "1rem"
+                }}
+              />
+              <p style={{ 
+                marginTop: DESIGN.spacing.xs,
+                ...DESIGN.typography.tiny,
+                color: DESIGN.colors.text.muted
+              }}>
+                IP 被封禁後的持續時間，到期後自動解封
+              </p>
+            </div>
+          </div>
+          
+          <div style={{
+            padding: DESIGN.spacing.md,
+            background: "rgba(96, 165, 250, 0.1)",
+            border: `1px solid ${DESIGN.colors.info}`,
+            borderRadius: DESIGN.borderRadius.sm,
+            ...DESIGN.typography.small,
+            color: DESIGN.colors.info
+          }}>
+            💡 提示：配置會自動保存。當 IP 在 {config.timeWindow} 分鐘內失敗 {config.failureThreshold} 次時，將自動封禁 {config.banDuration} 小時。
+          </div>
         </div>
       </ModuleContainer>
     </div>
