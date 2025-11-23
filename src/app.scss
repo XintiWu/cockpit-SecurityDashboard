@@ -1,5 +1,13 @@
 @use "page.scss";
 
 p {
-    font-weight: bold;
+  font-weight: bold;
 }
+
+/* 讓畫面可以捲動 */
+#app {
+  height: 100vh;
+  overflow-y: auto !important;
+  padding-bottom: 20px;
+}
+
