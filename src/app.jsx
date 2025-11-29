@@ -712,6 +712,32 @@ export function Application() {
   const [blockingIP, setBlockingIP] = useState(null);
   const [blockedIPs, setBlockedIPs] = useState([]);
   
+  // 測試模式：假的 IP 地址列表
+  const [testIPs, setTestIPs] = useState(() => {
+    const saved = localStorage.getItem('security-guard-test-ips');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved test IPs:', e);
+      }
+    }
+    return [];
+  });
+  
+  // IP 輸入歷史記錄（用於自動完成）
+  const [ipHistory, setIpHistory] = useState(() => {
+    const saved = localStorage.getItem('security-guard-ip-history');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved IP history:', e);
+      }
+    }
+    return [];
+  });
+  
   // 配置選項狀態
   const [config, setConfig] = useState(() => {
     const saved = localStorage.getItem('security-guard-config');
@@ -749,12 +775,60 @@ export function Application() {
     }
     return {};
   });
+  
+  // 手動解封的 IP 記錄 (IP -> 解封時間戳)，用於防止解封後立即自動封鎖
+  const [manuallyUnbannedIPs, setManuallyUnbannedIPs] = useState(() => {
+    const saved = localStorage.getItem('security-guard-manually-unbanned-ips');
+    if (saved) {
+      try {
+        const records = JSON.parse(saved);
+        const now = Date.now();
+        // 只保留最近 10 分鐘內解封的記錄
+        return Object.fromEntries(
+          Object.entries(records).filter(([ip, timestamp]) => {
+            return (now - timestamp) < 10 * 60 * 1000; // 10 分鐘
+          })
+        );
+      } catch (e) {
+        console.error('Failed to parse saved manually unbanned IPs:', e);
+      }
+    }
+    return {};
+  });
 
-  // 資料解析
+  // 資料解析（包含測試 IP）
   const sshFailedParsed = useMemo(() => {
     const lines = sshFailedRaw.split("\n").filter(l => l.trim());
-    return lines.map(parseSSHFailedLine).filter(Boolean);
-  }, [sshFailedRaw]);
+    const realParsed = lines.map(parseSSHFailedLine).filter(Boolean);
+    
+    // 添加測試 IP 的假日誌
+    const testParsed = [];
+    const now = new Date();
+    const timestamp = now.toLocaleString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit',
+      hour12: false 
+    }).replace(',', '');
+    
+    testIPs.forEach(testIP => {
+      // 為每個測試 IP 生成指定數量的失敗記錄
+      for (let i = 0; i < testIP.failCount; i++) {
+        testParsed.push({
+          timestamp: timestamp,
+          user: testIP.user || `testuser${i + 1}`,
+          ip: testIP.ip,
+          port: testIP.port || "22",
+          type: "failed",
+          raw: `${timestamp} sshd[12345]: Failed password for ${testIP.user || `testuser${i + 1}`} from ${testIP.ip} port ${testIP.port || "22"} ssh2`
+        });
+      }
+    });
+    
+    return [...realParsed, ...testParsed];
+  }, [sshFailedRaw, testIPs]);
 
   const sshAcceptedParsed = useMemo(() => {
     const lines = sshAcceptedRaw.split("\n").filter(l => l.trim());
@@ -810,6 +884,96 @@ export function Application() {
     // 更新 blockedIPs 列表
     setBlockedIPs(Object.keys(bannedIPRecords));
   }, [bannedIPRecords]);
+  
+  // 保存手動解封記錄到 localStorage
+  useEffect(() => {
+    localStorage.setItem('security-guard-manually-unbanned-ips', JSON.stringify(manuallyUnbannedIPs));
+  }, [manuallyUnbannedIPs]);
+  
+  // 定期清理過期的手動解封記錄
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      setManuallyUnbannedIPs(prev => {
+        const updated = Object.fromEntries(
+          Object.entries(prev).filter(([ip, timestamp]) => {
+            return (now - timestamp) < 10 * 60 * 1000; // 保留 10 分鐘內的記錄
+          })
+        );
+        return updated;
+      });
+    }, 60000); // 每分鐘檢查一次
+    
+    return () => clearInterval(cleanupInterval);
+  }, []);
+  
+  // 保存測試 IP 到 localStorage
+  useEffect(() => {
+    localStorage.setItem('security-guard-test-ips', JSON.stringify(testIPs));
+  }, [testIPs]);
+  
+  // 保存 IP 歷史記錄到 localStorage
+  useEffect(() => {
+    localStorage.setItem('security-guard-ip-history', JSON.stringify(ipHistory));
+  }, [ipHistory]);
+  
+  // 驗證 IP 地址格式和範圍的函數
+  function isValidIP(ip) {
+    if (!ip || typeof ip !== 'string') return false;
+    
+    // 檢查基本格式：4 個數字段，用點分隔
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (!ipRegex.test(ip)) return false;
+    
+    // 檢查每個段是否在 0-255 範圍內
+    const parts = ip.split('.');
+    for (const part of parts) {
+      const num = parseInt(part, 10);
+      if (isNaN(num) || num < 0 || num > 255) {
+        return false;
+      }
+    }
+    
+    return true;
+  }
+  
+  // 添加測試 IP 的函數
+  function addTestIP(ip, failCount = 1, user = "testuser", port = "22") {
+    if (!ip || testIPs.some(t => t.ip === ip)) {
+      alert(`IP ${ip} 已經存在於列表中`);
+      return;
+    }
+    
+    // 驗證 IP 格式和範圍
+    if (!isValidIP(ip)) {
+      alert("請輸入有效的 IP 地址格式（例如：192.168.1.100）\n\n每個數字段必須在 0-255 範圍內");
+      return;
+    }
+    
+    setTestIPs(prev => [...prev, { ip, failCount: parseInt(failCount) || 1, user, port }]);
+    
+    // 將 IP 添加到歷史記錄（如果不存在）
+    setIpHistory(prev => {
+      if (!prev.includes(ip)) {
+        // 限制歷史記錄最多保存 20 個
+        const updated = [ip, ...prev].slice(0, 20);
+        return updated;
+      }
+      return prev;
+    });
+  }
+  
+  // 移除測試 IP 的函數
+  function removeTestIP(ip) {
+    setTestIPs(prev => prev.filter(t => t.ip !== ip));
+  }
+  
+  // 清除所有測試 IP
+  function clearAllTestIPs() {
+    if (window.confirm("確定要清除所有 IP 嗎？")) {
+      setTestIPs([]);
+    }
+  }
   
   // 檢查並清理過期的封禁記錄
   useEffect(() => {
@@ -901,6 +1065,19 @@ export function Application() {
   async function handleBlockIP(ip, autoBan = false, reason = "手動封禁") {
     if (!ip || blockingIP) return;
     
+    // 驗證 IP 地址格式和範圍（在執行命令之前）
+    if (!isValidIP(ip)) {
+      const errorMsg = autoBan 
+        ? `無法自動封鎖無效的 IP 地址：${ip}\n\nIP 地址格式錯誤或包含超出範圍的數字（必須在 0-255 之間）`
+        : `無效的 IP 地址：${ip}\n\n請輸入有效的 IP 地址格式（例如：192.168.1.100）\n每個數字段必須在 0-255 範圍內`;
+      if (!autoBan) {
+        alert(`❌ ${errorMsg}`);
+      } else {
+        console.error('Auto-ban failed: Invalid IP address', ip);
+      }
+      return;
+    }
+    
     // 檢查是否已經被封禁
     if (bannedIPRecords[ip]) {
       const record = bannedIPRecords[ip];
@@ -978,6 +1155,14 @@ export function Application() {
         return updated;
       });
       
+      // 如果是手動解封（showAlert = true），記錄到手動解封列表，防止立即自動封鎖
+      if (showAlert) {
+        setManuallyUnbannedIPs(prev => ({
+          ...prev,
+          [ip]: Date.now()
+        }));
+      }
+      
       if (showAlert) {
         alert(`✅ 已成功解封 IP: ${ip}`);
       }
@@ -989,6 +1174,15 @@ export function Application() {
         delete updated[ip];
         return updated;
       });
+      
+      // 如果是手動解封，也記錄到手動解封列表
+      if (showAlert) {
+        setManuallyUnbannedIPs(prev => ({
+          ...prev,
+          [ip]: Date.now()
+        }));
+      }
+      
       if (showAlert) {
         alert(`⚠️ 已從記錄中移除 IP: ${ip}\n（防火牆規則可能不存在）`);
       }
@@ -1011,6 +1205,14 @@ export function Application() {
         }
       }
       
+      // 檢查是否在最近手動解封的列表中（10 分鐘內），如果是則跳過自動封鎖
+      if (manuallyUnbannedIPs[item.ip]) {
+        const unbanTime = manuallyUnbannedIPs[item.ip];
+        if ((now - unbanTime) < 10 * 60 * 1000) { // 10 分鐘內
+          return; // 最近手動解封，不自動封鎖
+        }
+      }
+      
       // 如果失敗次數超過閾值，自動封禁
       if (item.count >= config.failureThreshold) {
         handleBlockIP(item.ip, true).catch(err => {
@@ -1018,7 +1220,7 @@ export function Application() {
         });
       }
     });
-  }, [sshFailedByIP, config.failureThreshold, bannedIPRecords]);
+  }, [sshFailedByIP, config.failureThreshold, bannedIPRecords, manuallyUnbannedIPs]);
 
   // 計算最後更新時間
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
@@ -1815,7 +2017,295 @@ export function Application() {
         </div>
       </ModuleContainer>
 
-      {/* 模組 6：配置選項 */}
+      {/* 模組 6：手動新增 IP */}
+      <ModuleContainer title="手動新增 IP" description="手動添加 IP 地址來測試封鎖功能">
+        <div style={{
+          borderRadius: DESIGN.borderRadius.md,
+          border: `1px solid ${DESIGN.colors.bg.border}`,
+          padding: DESIGN.spacing.xl,
+          background: DESIGN.colors.bg.card,
+          boxShadow: DESIGN.shadows.sm
+        }}>
+          <div style={{ marginBottom: DESIGN.spacing.lg }}>
+            <h3 style={{ 
+              ...DESIGN.typography.h3, 
+              margin: `0 0 ${DESIGN.spacing.md}px 0`,
+              color: DESIGN.colors.text.primary
+            }}>
+              添加 IP
+            </h3>
+            <div style={{ 
+              display: "grid", 
+              gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr 1fr 1fr auto", 
+              gap: DESIGN.spacing.md,
+              marginBottom: DESIGN.spacing.md
+            }}>
+              <div style={{ position: "relative" }}>
+                <input
+                  type="text"
+                  id="test-ip-input"
+                  list="ip-history-list"
+                  placeholder="例如：192.168.1.100"
+                  autoComplete="off"
+                  style={{
+                    padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                    borderRadius: DESIGN.borderRadius.sm,
+                    border: `1px solid ${DESIGN.colors.bg.border}`,
+                    background: DESIGN.colors.bg.card,
+                    color: DESIGN.colors.text.primary,
+                    ...DESIGN.typography.body,
+                    fontFamily: "monospace",
+                    width: "100%"
+                  }}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      const input = e.target;
+                      const ip = input.value.trim();
+                      if (ip) {
+                        addTestIP(ip, 1);
+                        input.value = '';
+                      }
+                    }
+                  }}
+                />
+                <datalist id="ip-history-list">
+                  {ipHistory.map((ip, idx) => (
+                    <option key={idx} value={ip} />
+                  ))}
+                </datalist>
+              </div>
+              <input
+                type="number"
+                id="test-fail-count"
+                placeholder="失敗次數"
+                min="1"
+                max="50"
+                defaultValue="1"
+                style={{
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body
+                }}
+              />
+              <input
+                type="text"
+                id="test-user"
+                placeholder="用戶名"
+                defaultValue="testuser"
+                style={{
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body
+                }}
+              />
+              <input
+                type="text"
+                id="test-port"
+                placeholder="端口"
+                defaultValue="22"
+                style={{
+                  padding: `${DESIGN.spacing.sm}px ${DESIGN.spacing.md}px`,
+                  borderRadius: DESIGN.borderRadius.sm,
+                  border: `1px solid ${DESIGN.colors.bg.border}`,
+                  background: DESIGN.colors.bg.card,
+                  color: DESIGN.colors.text.primary,
+                  ...DESIGN.typography.body
+                }}
+              />
+              <button
+                className="pf-c-button pf-m-primary pf-m-small"
+                onClick={() => {
+                  const ipInput = document.getElementById('test-ip-input');
+                  const failCountInput = document.getElementById('test-fail-count');
+                  const userInput = document.getElementById('test-user');
+                  const portInput = document.getElementById('test-port');
+                  const ip = ipInput.value.trim();
+                  const failCount = parseInt(failCountInput.value) || 1;
+                  const user = userInput.value.trim() || "testuser";
+                  const port = portInput.value.trim() || "22";
+                  
+                  if (ip) {
+                    addTestIP(ip, failCount, user, port);
+                    ipInput.value = '';
+                    failCountInput.value = '1';
+                    userInput.value = 'testuser';
+                    portInput.value = '22';
+                  }
+                }}
+                style={{ 
+                  ...DESIGN.typography.tiny,
+                  whiteSpace: "nowrap"
+                }}
+              >
+                ➕ 添加
+              </button>
+            </div>
+            <div style={{
+              padding: DESIGN.spacing.md,
+              background: "rgba(96, 165, 250, 0.1)",
+              border: `1px solid ${DESIGN.colors.info}`,
+              borderRadius: DESIGN.borderRadius.sm,
+              ...DESIGN.typography.small,
+              color: DESIGN.colors.info,
+              marginBottom: DESIGN.spacing.md
+            }}>
+              💡 提示：添加 IP 後，它們會出現在 SSH 威脅分析中。您可以：
+              <ul style={{ margin: `${DESIGN.spacing.xs}px 0 0 ${DESIGN.spacing.lg}px`, padding: 0 }}>
+                <li>手動封鎖：點擊「🚫 封鎖」按鈕</li>
+                <li>自動封鎖：設置失敗次數 ≥ 閾值（預設 5 次）</li>
+                <li>解除封鎖：在「IP 封禁管理」中點擊「🔓 解封」</li>
+              </ul>
+            </div>
+          </div>
+          
+          {testIPs.length > 0 && (
+            <div>
+              <div style={{ 
+                display: "flex", 
+                justifyContent: "space-between", 
+                alignItems: "center",
+                marginBottom: DESIGN.spacing.md
+              }}>
+                <h3 style={{ 
+                  ...DESIGN.typography.h3, 
+                  margin: 0,
+                  color: DESIGN.colors.text.primary
+                }}>
+                  當前 IP 列表 ({testIPs.length})
+                </h3>
+                <button
+                  className="pf-c-button pf-m-danger pf-m-small"
+                  onClick={clearAllTestIPs}
+                  style={{ 
+                    ...DESIGN.typography.tiny
+                  }}
+                >
+                  🗑️ 清除全部
+                </button>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  className="pf-c-table pf-m-compact"
+                  style={{ 
+                    width: "100%", 
+                    ...DESIGN.typography.small,
+                    borderCollapse: "separate",
+                    borderSpacing: 0
+                  }}
+                >
+                  <thead>
+                    <tr style={{
+                      background: DESIGN.colors.bg.card,
+                      borderBottom: `2px solid ${DESIGN.colors.bg.border}`
+                    }}>
+                      <th style={{ 
+                        padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                        textAlign: "left",
+                        fontWeight: "600",
+                        color: DESIGN.colors.text.primary
+                      }}>
+                        IP 位址
+                      </th>
+                      <th style={{ 
+                        padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                        textAlign: "left",
+                        fontWeight: "600",
+                        color: DESIGN.colors.text.primary
+                      }}>
+                        失敗次數
+                      </th>
+                      <th style={{ 
+                        padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                        textAlign: "left",
+                        fontWeight: "600",
+                        color: DESIGN.colors.text.primary
+                      }}>
+                        用戶名
+                      </th>
+                      <th style={{ 
+                        padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                        textAlign: "left",
+                        fontWeight: "600",
+                        color: DESIGN.colors.text.primary
+                      }}>
+                        端口
+                      </th>
+                      <th style={{ 
+                        padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                        textAlign: "left",
+                        fontWeight: "600",
+                        color: DESIGN.colors.text.primary
+                      }}>
+                        操作
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {testIPs.map((testIP, idx) => (
+                      <tr 
+                        key={idx}
+                        style={{
+                          borderBottom: `1px solid ${DESIGN.colors.bg.border}`
+                        }}
+                      >
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          fontFamily: "monospace", 
+                          fontWeight: "bold",
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {testIP.ip}
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          color: testIP.failCount >= config.failureThreshold 
+                            ? DESIGN.colors.danger 
+                            : DESIGN.colors.text.primary,
+                          fontWeight: testIP.failCount >= config.failureThreshold ? "bold" : "normal"
+                        }}>
+                          {testIP.failCount} {testIP.failCount >= config.failureThreshold ? "⚠️ (將自動封鎖)" : ""}
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {testIP.user}
+                        </td>
+                        <td style={{ 
+                          padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px`,
+                          fontFamily: "monospace",
+                          color: DESIGN.colors.text.primary
+                        }}>
+                          {testIP.port}
+                        </td>
+                        <td style={{ padding: `${DESIGN.spacing.md}px ${DESIGN.spacing.lg}px` }}>
+                          <button
+                            className="pf-c-button pf-m-danger pf-m-small"
+                            onClick={() => removeTestIP(testIP.ip)}
+                            style={{ 
+                              ...DESIGN.typography.tiny
+                            }}
+                          >
+                            🗑️ 移除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </ModuleContainer>
+
+      {/* 模組 7：配置選項 */}
       <ModuleContainer title="配置選項" description="設定 IP 封禁規則參數">
         <div style={{
           borderRadius: DESIGN.borderRadius.md,
