@@ -714,7 +714,7 @@ export function Application() {
   
   // 測試模式：假的 IP 地址列表
   const [testIPs, setTestIPs] = useState(() => {
-    const saved = localStorage.getItem('security-guard-test-ips');
+    const saved = localStorage.getItem('security-dashboard-test-ips');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -727,7 +727,7 @@ export function Application() {
   
   // IP 輸入歷史記錄（用於自動完成）
   const [ipHistory, setIpHistory] = useState(() => {
-    const saved = localStorage.getItem('security-guard-ip-history');
+    const saved = localStorage.getItem('security-dashboard-ip-history');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -740,7 +740,7 @@ export function Application() {
   
   // 配置選項狀態
   const [config, setConfig] = useState(() => {
-    const saved = localStorage.getItem('security-guard-config');
+    const saved = localStorage.getItem('security-dashboard-config');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -757,7 +757,7 @@ export function Application() {
   
   // IP 封禁記錄 (IP -> { bannedAt, banDuration, reason })
   const [bannedIPRecords, setBannedIPRecords] = useState(() => {
-    const saved = localStorage.getItem('security-guard-banned-ips');
+    const saved = localStorage.getItem('security-dashboard-banned-ips');
     if (saved) {
       try {
         const records = JSON.parse(saved);
@@ -778,7 +778,7 @@ export function Application() {
   
   // 手動解封的 IP 記錄 (IP -> 解封時間戳)，用於防止解封後立即自動封鎖
   const [manuallyUnbannedIPs, setManuallyUnbannedIPs] = useState(() => {
-    const saved = localStorage.getItem('security-guard-manually-unbanned-ips');
+    const saved = localStorage.getItem('security-dashboard-manually-unbanned-ips');
     if (saved) {
       try {
         const records = JSON.parse(saved);
@@ -875,19 +875,19 @@ export function Application() {
 
   // 保存配置到 localStorage
   useEffect(() => {
-    localStorage.setItem('security-guard-config', JSON.stringify(config));
+    localStorage.setItem('security-dashboard-config', JSON.stringify(config));
   }, [config]);
   
   // 保存封禁記錄到 localStorage
   useEffect(() => {
-    localStorage.setItem('security-guard-banned-ips', JSON.stringify(bannedIPRecords));
+    localStorage.setItem('security-dashboard-banned-ips', JSON.stringify(bannedIPRecords));
     // 更新 blockedIPs 列表
     setBlockedIPs(Object.keys(bannedIPRecords));
   }, [bannedIPRecords]);
   
   // 保存手動解封記錄到 localStorage
   useEffect(() => {
-    localStorage.setItem('security-guard-manually-unbanned-ips', JSON.stringify(manuallyUnbannedIPs));
+    localStorage.setItem('security-dashboard-manually-unbanned-ips', JSON.stringify(manuallyUnbannedIPs));
   }, [manuallyUnbannedIPs]);
   
   // 定期清理過期的手動解封記錄
@@ -909,12 +909,12 @@ export function Application() {
   
   // 保存測試 IP 到 localStorage
   useEffect(() => {
-    localStorage.setItem('security-guard-test-ips', JSON.stringify(testIPs));
+    localStorage.setItem('security-dashboard-test-ips', JSON.stringify(testIPs));
   }, [testIPs]);
   
   // 保存 IP 歷史記錄到 localStorage
   useEffect(() => {
-    localStorage.setItem('security-guard-ip-history', JSON.stringify(ipHistory));
+    localStorage.setItem('security-dashboard-ip-history', JSON.stringify(ipHistory));
   }, [ipHistory]);
   
   // 驗證 IP 地址格式和範圍的函數
@@ -1303,7 +1303,7 @@ export function Application() {
             marginBottom: DESIGN.spacing.xs 
           }}>
             <h1 style={{ ...DESIGN.typography.h1, margin: 0, fontSize: isMobile ? "1.5rem" : DESIGN.typography.h1.fontSize }}>
-              🛡️ Security Guard
+              🛡️ Security Dashboard
             </h1>
             <div style={{
               display: "inline-flex",

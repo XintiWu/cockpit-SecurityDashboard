@@ -1,11 +1,11 @@
-Name: cockpit-starter-kit
+Name: cockpit-security-dashboard
 Version: %{VERSION}
 Release: 1%{?dist}
-Summary: Cockpit Starter Kit Example Module
+Summary: Cockpit Security Monitoring and Management Dashboard
 License: LGPL-2.1-or-later
 
-Source0: https://github.com/cockpit-project/starter-kit/releases/download/%{version}/%{name}-%{version}.tar.xz
-Source1: https://github.com/cockpit-project/starter-kit/releases/download/%{version}/%{name}-node-%{version}.tar.xz
+Source0: https://github.com/xinti/cockpit-security-dashboard/releases/download/%{version}/%{name}-%{version}.tar.xz
+Source1: https://github.com/xinti/cockpit-security-dashboard/releases/download/%{version}/%{name}-node-%{version}.tar.xz
 BuildArch: noarch
 %if ! 0%{?suse_version}
 ExclusiveArch: %{nodejs_arches} noarch
@@ -30,7 +30,7 @@ Requires: cockpit-bridge
 %{NPM_PROVIDES}
 
 %description
-Cockpit Starter Kit Example Module
+Cockpit Security Monitoring and Management Dashboard
 
 %prep
 %autosetup -n %{name} -a 1
@@ -62,3 +62,4 @@ appstream-util validate-relax --nonet %{buildroot}/%{_datadir}/metainfo/*
 %{_datadir}/metainfo/*
 
 %changelog
+

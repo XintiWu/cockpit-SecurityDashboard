@@ -1,8 +1,8 @@
-# starter-kit German translations
+# security-dashboard German translations
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: starter-kit 1.0\n"
+"Project-Id-Version: security-dashboard 1.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2022-03-09 16:09+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
@@ -15,24 +15,24 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=n != 1\n"
 
 #: src/index.html:20
-msgid "Cockpit Starter Kit"
-msgstr "Cockpit Bausatz"
+msgid "Cockpit Security Dashboard"
+msgstr "Cockpit Sicherheits-Dashboard"
 
 #: src/app.jsx:43
 msgid "Running on $0"
 msgstr "Läuft auf $0"
 
-#: org.cockpit-project.starter-kit.metainfo.xml:6
-msgid "Scaffolding for a cockpit module"
-msgstr "Gerüst für ein Cockpit-Modul"
+#: org.cockpit-project.security-dashboard.metainfo.xml:6
+msgid "Cockpit security monitoring and management dashboard"
+msgstr "Cockpit Sicherheitsüberwachungs- und Verwaltungs-Dashboard"
 
-#: org.cockpit-project.starter-kit.metainfo.xml:8
-msgid "Scaffolding for a cockpit module."
-msgstr "Gerüst für ein Cockpit-Modul."
+#: org.cockpit-project.security-dashboard.metainfo.xml:8
+msgid "A comprehensive security monitoring and management dashboard for Cockpit."
+msgstr "Ein umfassendes Sicherheitsüberwachungs- und Verwaltungs-Dashboard für Cockpit."
 
-#: src/manifest.json:0 org.cockpit-project.starter-kit.metainfo.xml:5
-msgid "Starter Kit"
-msgstr "Bausatz"
+#: src/manifest.json:0 org.cockpit-project.security-dashboard.metainfo.xml:5
+msgid "Security Dashboard"
+msgstr "Sicherheits-Dashboard"
 
 #: src/app.jsx:29
 msgid "Unknown"
