@@ -1,0 +1,19 @@
+# 將以下內容加入到 cockpit-project.github.io/_data/applications.yml
+# 建議加在 'system' 類別的應用中
+
+- name: Security Dashboard
+  package: cockpit-security-dashboard
+  description: Security monitoring and management dashboard for Cockpit
+  url: https://github.com/XintiWu/cockpit-SecurityGuard
+  category: system
+  tags:
+    - security
+    - monitoring
+    - dashboard
+  maintainer:
+    name: Xinti Wu
+    github: XintiWu
+
+# 如果你有截圖，取消下面這行的註解並更新路徑
+# screenshot: https://raw.githubusercontent.com/XintiWu/cockpit-SecurityGuard/main/screenshot.png
+
