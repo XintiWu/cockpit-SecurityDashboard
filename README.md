@@ -4,7 +4,10 @@
 
 A comprehensive security monitoring and management dashboard for [Cockpit](https://cockpit-project.org/).
 
-![Security Dashboard Screenshot](https://via.placeholder.com/800x400?text=Security+Dashboard+Screenshot)
+<img width="2048" height="1251" alt="image" src="https://github.com/user-attachments/assets/3900a1fe-c860-4778-b7e5-75d94621bb1a" />
+<img width="2048" height="1294" alt="image" src="https://github.com/user-attachments/assets/8d594fdb-1527-41a2-92ae-b4a2f0bdb680" />
+<img width="2048" height="1260" alt="image" src="https://github.com/user-attachments/assets/03afb5d5-f4a9-4c5e-94b8-7cbaa12a7d5e" />
+
 
 ## Features
 
